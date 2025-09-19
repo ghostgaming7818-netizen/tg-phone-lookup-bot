@@ -325,6 +325,7 @@ async def codes_list_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(chunk)
 
 # Main lookup command with credit deduction
+# Replace the existing num_cmd with this updated version
 async def num_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Usage: /num 7986782429")
@@ -362,20 +363,37 @@ async def num_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 data = await resp.json()
 
-        # handle API responses
+        # --- NEW: normalize/unwrap API response ---
+        # If API wraps results in {"data": [...] , ...}, use that list.
+        # If API returns a single dict record, convert to [dict].
+        # If API returns a list already, use it.
+        data_list = None
         if isinstance(data, dict):
-            if data.get("message") == "No records found":
-                await update.message.reply_text("❌ NO RESULT FOUND")
-                return
-            elif data.get("status") == "error":
-                await update.message.reply_text(f"❌ API Error: {data.get('message')}")
-                return
+            # prefer 'data' key if present
+            if "data" in data and isinstance(data["data"], (list, dict)):
+                inner = data["data"]
+                if isinstance(inner, list):
+                    data_list = inner
+                elif isinstance(inner, dict):
+                    data_list = [inner]
+                else:
+                    data_list = []
             else:
-                data_list = [data]
+                # if dict looks like a single record (has mobile/name keys), wrap it
+                if any(k in data for k in ["mobile", "name", "alt_mobile", "id_number", "address", "email"]):
+                    data_list = [data]
+                else:
+                    # handle common API error structure
+                    if data.get("message") == "No records found":
+                        await update.message.reply_text("❌ NO RESULT FOUND")
+                        return
+                    if data.get("status") == "error":
+                        await update.message.reply_text(f"❌ API Error: {data.get('message')}")
+                        return
+                    # unknown dict structure — try to be graceful
+                    await update.message.reply_text("Unexpected API response structure.")
+                    return
         elif isinstance(data, list):
-            if not data:
-                await update.message.reply_text("❌ NO RESULT FOUND")
-                return
             data_list = data
         else:
             await update.message.reply_text("Unexpected API response format.")
@@ -384,6 +402,10 @@ async def num_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # filter out empty records just in case
         filtered_list = []
         for rec in data_list:
+            # ensure rec is a dict
+            if not isinstance(rec, dict):
+                continue
+            # ignore meta keys like api_owner / developer by not using them
             if any(rec.get(k) for k in ["mobile", "alt_mobile", "name", "father_name", "circle", "id_number", "address", "email"]):
                 filtered_list.append(rec)
 
